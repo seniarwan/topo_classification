@@ -126,22 +126,14 @@ def plot_results_advanced(classification, slope=None, convexity=None, texture=No
                           title_suffix="", figsize=(15, 12)):
     """
     Advanced plotting with better nodata handling and color schemes
-    
-    Parameters:
-    -----------
-    classification : numpy.ndarray
-        Classification result
-    slope : numpy.ndarray, optional
-        Slope values
-    convexity : numpy.ndarray, optional  
-        Convexity values
-    texture : numpy.ndarray, optional
-        Texture values
-    title_suffix : str
-        Additional title text
-    figsize : tuple
-        Figure size
     """
+    # Debug information
+    if slope is not None:
+        print(f"Debug info:")
+        print(f"  Slope: min={np.nanmin(slope):.2f}, max={np.nanmax(slope):.2f}, valid={np.sum(~np.isnan(slope))}")
+        print(f"  Convexity: min={np.nanmin(convexity):.4f}, max={np.nanmax(convexity):.4f}, valid={np.sum(~np.isnan(convexity))}")
+        print(f"  Texture: min={np.nanmin(texture):.4f}, max={np.nanmax(texture):.4f}, valid={np.sum(~np.isnan(texture))}")
+    
     # Determine subplot layout
     if all(x is not None for x in [slope, convexity, texture]):
         fig, axes = plt.subplots(2, 2, figsize=figsize)
@@ -178,18 +170,31 @@ def plot_results_advanced(classification, slope=None, convexity=None, texture=No
         axes[1].axis('off')
         plt.colorbar(im2, ax=axes[1], shrink=0.8)
         
-        # 3. Convexity plot
+        # 3. Convexity plot  
         convexity_data = convexity.copy()
         convexity_data[nodata_mask] = np.nan
-        convexity_masked = np.ma.masked_invalid(convexity_data)
         
-        # Use symmetric colormap for convexity
-        conv_abs_max = np.nanmax(np.abs(convexity_data))
-        im3 = axes[2].imshow(convexity_masked, cmap='RdBu_r', 
-                            vmin=-conv_abs_max, vmax=conv_abs_max)
-        axes[2].set_title('Convexity')
-        axes[2].axis('off')
-        plt.colorbar(im3, ax=axes[2], shrink=0.8)
+        # Check if convexity has valid data
+        if np.all(np.isnan(convexity_data)):
+            # Show message for empty convexity
+            axes[2].text(0.5, 0.5, 'No valid\nconvexity data', 
+                        ha='center', va='center', transform=axes[2].transAxes,
+                        fontsize=12, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
+            axes[2].set_title('Convexity (No Data)')
+            axes[2].axis('off')
+        else:
+            convexity_masked = np.ma.masked_invalid(convexity_data)
+            
+            # Use symmetric colormap for convexity
+            conv_abs_max = np.nanmax(np.abs(convexity_data))
+            if conv_abs_max > 0:
+                im3 = axes[2].imshow(convexity_masked, cmap='RdBu_r', 
+                                    vmin=-conv_abs_max, vmax=conv_abs_max)
+            else:
+                im3 = axes[2].imshow(convexity_masked, cmap='RdBu_r')
+            axes[2].set_title('Convexity')
+            axes[2].axis('off')
+            plt.colorbar(im3, ax=axes[2], shrink=0.8)
         
         # 4. Texture plot
         texture_data = texture.copy()

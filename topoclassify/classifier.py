@@ -25,13 +25,25 @@ class TopographicClassifier:
         self.load_dem()
         
     def load_dem(self):
-        """Load DEM data"""
+        """Load DEM data with proper nodata handling"""
         with rasterio.open(self.dem_path) as src:
             self.dem_data = src.read(1).astype(np.float32)
             self.profile = src.profile
-            # Handle nodata
+            
+            # Handle various nodata representations
             if src.nodata is not None:
                 self.dem_data[self.dem_data == src.nodata] = np.nan
+            
+            # Also handle common nodata values
+            nodata_values = [-9999, -32768, 32767, 0]  # Common nodata values
+            for nodata_val in nodata_values:
+                if np.any(self.dem_data == nodata_val):
+                    # Only treat as nodata if it's at the edges or forms large patches
+                    potential_nodata = self.dem_data == nodata_val
+                    if np.sum(potential_nodata) > 0.01 * self.dem_data.size:  # >1% of pixels
+                        self.dem_data[potential_nodata] = np.nan
+            
+            print(f"DEM loaded: {self.dem_data.shape}, Valid pixels: {np.sum(~np.isnan(self.dem_data))}")
             
     @property
     def slope(self):
@@ -191,10 +203,13 @@ class TopographicClassifier:
     
     def _apply_postprocessing(self, classification, slope, convexity, texture):
         """
-        Apply post-processing to handle unclassified pixels
+        Apply post-processing to handle unclassified pixels (excluding nodata)
         """
+        # Create comprehensive valid data mask
+        valid_pixels = (~np.isnan(slope) & ~np.isnan(convexity) & ~np.isnan(texture) & 
+                       np.isfinite(slope) & np.isfinite(convexity) & np.isfinite(texture))
+        
         # Find unclassified valid pixels
-        valid_pixels = ~np.isnan(slope) & ~np.isnan(convexity) & ~np.isnan(texture)
         unclassified = (classification == 0) & valid_pixels
         
         if np.any(unclassified):
@@ -202,6 +217,10 @@ class TopographicClassifier:
             
             # Assign to class 24 (lowest slope, lowest convexity, lowest texture)
             classification[unclassified] = 24
+        
+        # Ensure nodata areas remain as 0
+        nodata_areas = ~valid_pixels
+        classification[nodata_areas] = 0
     
     def get_class_descriptions(self):
         """

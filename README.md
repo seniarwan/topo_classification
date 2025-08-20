@@ -1,6 +1,6 @@
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1039mDn3_DqvFpiCit0xY2yzqqB670eIU#offline=true&sandboxMode=true)
 
-# Topographic Classification - Pure Python
+# Topographic Classification - Python
 
 Implementasi klasifikasi topografi Iwahashi & Pike (2007) menggunakan Python.
 

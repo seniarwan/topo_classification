@@ -8,7 +8,7 @@ import rasterio
 
 def plot_results(classification, slope=None, convexity=None, texture=None):
     """
-    Plot classification results and metrics (excluding nodata)
+    Standard plotting function with consistent styling (used by manual classification)
     
     Parameters:
     -----------
@@ -43,16 +43,19 @@ def plot_results(classification, slope=None, convexity=None, texture=None):
     plt.colorbar(im1, ax=axes[0], shrink=0.8, label='Class')
     
     if len(axes) > 1 and slope is not None:
-        # Plot slope (mask nodata)
+        # Plot slope (mask nodata) - CONSISTENT COLORMAP
         slope_masked = np.ma.masked_where(nodata_mask, slope)
-        im2 = axes[1].imshow(slope_masked, cmap='viridis')
+        im2 = axes[1].imshow(slope_masked, cmap='viridis')  # Same as manual
         axes[1].set_title('Slope (degrees)')
         axes[1].axis('off')
         plt.colorbar(im2, ax=axes[1], shrink=0.8)
         
-        # Plot convexity (mask nodata)
+        # Plot convexity (mask nodata) - CONSISTENT RANGE
         convexity_masked = np.ma.masked_where(nodata_mask, convexity)
-        im3 = axes[2].imshow(convexity_masked, cmap='RdBu_r', vmin=-0.1, vmax=0.1)
+        # Use same range logic as advanced function
+        conv_abs_max = np.nanmax(np.abs(convexity[~nodata_mask])) if np.any(~nodata_mask) else 0.1
+        im3 = axes[2].imshow(convexity_masked, cmap='RdBu_r', 
+                            vmin=-conv_abs_max, vmax=conv_abs_max)
         axes[2].set_title('Convexity')
         axes[2].axis('off')
         plt.colorbar(im3, ax=axes[2], shrink=0.8)
@@ -99,28 +102,56 @@ def save_geotiff(data, output_path, profile):
     
     print(f"Saved to: {output_path}")
 
-def create_valid_data_mask(*arrays):
+def compare_results(result1, result2, name1="Manual", name2="Quick"):
     """
-    Create mask for valid (non-nodata) pixels across multiple arrays
+    Compare two classification results
     
     Parameters:
     -----------
-    *arrays : numpy.ndarray
-        Variable number of arrays to check
-        
-    Returns:
-    --------
-    numpy.ndarray
-        Boolean mask where True = valid data
+    result1, result2 : numpy.ndarray
+        Classification results to compare
+    name1, name2 : str
+        Names for the results
     """
-    valid_mask = np.ones(arrays[0].shape, dtype=bool)
+    print(f"\n🔍 Comparison: {name1} vs {name2}")
+    print("=" * 50)
     
-    for arr in arrays:
-        if arr is not None:
-            valid_mask &= ~np.isnan(arr)
-            valid_mask &= np.isfinite(arr)
+    # Basic statistics
+    print(f"Shape: {result1.shape} vs {result2.shape}")
+    print(f"Data type: {result1.dtype} vs {result2.dtype}")
     
-    return valid_mask
+    # Check if identical
+    if np.array_equal(result1, result2):
+        print("✅ Results are IDENTICAL!")
+        return True
+    
+    # Calculate differences
+    valid_mask = (result1 > 0) & (result2 > 0)
+    if np.any(valid_mask):
+        identical_pixels = np.sum((result1 == result2) & valid_mask)
+        total_valid = np.sum(valid_mask)
+        agreement = 100 * identical_pixels / total_valid
+        
+        print(f"Valid pixels: {total_valid:,}")
+        print(f"Identical pixels: {identical_pixels:,}")
+        print(f"Agreement: {agreement:.1f}%")
+        
+        # Class distribution comparison
+        unique1, counts1 = np.unique(result1[result1 > 0], return_counts=True)
+        unique2, counts2 = np.unique(result2[result2 > 0], return_counts=True)
+        
+        print(f"\nClass distribution:")
+        print(f"{name1}: {len(unique1)} classes - {list(unique1)}")
+        print(f"{name2}: {len(unique2)} classes - {list(unique2)}")
+        
+        if agreement > 95:
+            print("✅ Results are very similar (>95% agreement)")
+        elif agreement > 85:
+            print("⚠️ Results are similar (>85% agreement)")
+        else:
+            print("❌ Results are significantly different")
+            
+    return agreement > 95
 
 def plot_results_advanced(classification, slope=None, convexity=None, texture=None, 
                           title_suffix="", figsize=(15, 12)):
@@ -160,12 +191,12 @@ def plot_results_advanced(classification, slope=None, convexity=None, texture=No
     cbar1 = plt.colorbar(im1, ax=axes[0], shrink=0.8, label='Class')
     
     if len(axes) > 1 and slope is not None:
-        # 2. Slope plot
+        # 2. Slope plot - CONSISTENT COLORMAP
         slope_data = slope.copy()
         slope_data[nodata_mask] = np.nan
         slope_masked = np.ma.masked_invalid(slope_data)
         
-        im2 = axes[1].imshow(slope_masked, cmap='terrain')
+        im2 = axes[1].imshow(slope_masked, cmap='viridis')  # Same as standard function
         axes[1].set_title('Slope (degrees)')
         axes[1].axis('off')
         plt.colorbar(im2, ax=axes[1], shrink=0.8)

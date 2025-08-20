@@ -11,7 +11,7 @@ from .utils import plot_results, save_geotiff, get_class_stats
 
 def quick_classify(dem_path, output_path=None, show_plot=True):
     """
-    Quick topographic classification using ArcPy-equivalent algorithms
+    Quick topographic classification algorithms
     
     Parameters:
     -----------
@@ -27,9 +27,9 @@ def quick_classify(dem_path, output_path=None, show_plot=True):
     numpy.ndarray
         Classification result (24 classes)
     """
-    print("Starting ArcPy-equivalent topographic classification...")
+    print("Starting topographic classification...")
     
-    # Create classifier with ArcPy methods
+    # Create classifier
     classifier = TopographicClassifier(dem_path)
     
     # Run classification
@@ -66,7 +66,7 @@ def classify_detailed(dem_path, output_dir="./output/"):
     import os
     os.makedirs(output_dir, exist_ok=True)
     
-    print("Starting detailed ArcPy-equivalent classification...")
+    print("Starting detailed classification...")
     
     # Initialize classifier
     classifier = TopographicClassifier(dem_path)

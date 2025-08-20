@@ -35,7 +35,7 @@ class TopographicClassifier:
             print(f"Cell size updated to: {self.cell_size}")
         
     def load_dem(self):
-        """Load DEM with integer conversion (like ArcPy Int_sa)"""
+        """Load DEM with integer conversion"""
         with rasterio.open(self.dem_path) as src:
             dem_raw = src.read(1)
             self.profile = src.profile
@@ -108,7 +108,7 @@ class TopographicClassifier:
     
     def calculate_texture_arcpy(self):
         """
-        Calculate texture exactly following ArcPy workflow
+        Calculate texture
         """
         from scipy import ndimage
         
@@ -218,7 +218,7 @@ class TopographicClassifier:
         """
         print("Starting topographic classification...")
         
-        # Get all metrics using ArcPy methods
+        # Get all metrics
         slope = self.slope
         convexity = self.convexity
         texture = self.texture

@@ -8,12 +8,12 @@ from .metrics import calculate_slope, calculate_convexity, calculate_texture
 
 class TopographicClassifier:
     """
-    Main topographic classifier using ArcPy-equivalent algorithms
+    Main topographic classifier algorithms
     """
     
     def __init__(self, dem_path):
         """
-        Initialize classifier with ArcPy-equivalent settings
+        Initialize classifier settings
         
         Parameters:
         -----------
@@ -200,7 +200,7 @@ class TopographicClassifier:
     def convexity(self):
         """Calculate convexity using ArcPy method (cached)"""
         if not hasattr(self, '_convexity'):
-            print("Calculating convexity (ArcPy method)...")
+            print("Calculating convexity...")
             self._convexity = self.calculate_convexity_arcpy()
         return self._convexity
     
@@ -208,7 +208,7 @@ class TopographicClassifier:
     def texture(self):
         """Calculate texture using ArcPy method (cached)"""
         if not hasattr(self, '_texture'):
-            print("Calculating texture (ArcPy method)...")
+            print("Calculating texture...")
             self._texture = self.calculate_texture_arcpy()
         return self._texture
     
@@ -216,7 +216,7 @@ class TopographicClassifier:
         """
         Perform classification following exact ArcPy workflow sequence
         """
-        print("Starting ArcPy-equivalent topographic classification...")
+        print("Starting topographic classification...")
         
         # Get all metrics using ArcPy methods
         slope = self.slope

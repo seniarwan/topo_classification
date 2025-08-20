@@ -7,157 +7,204 @@ from scipy import ndimage
 from skimage.filters import rank
 from skimage.morphology import disk
 
-def calculate_slope(dem):
+def calculate_slope(dem, cell_size=1.0, method='horn'):
     """
-    Calculate slope in degrees
+    Calculate slope using Horn's method
     
     Parameters:
     -----------
     dem : numpy.ndarray
         Digital elevation model
+    cell_size : float
+        Cell size in map units
+    method : str
+        Method ('horn')
         
     Returns:
     --------
     numpy.ndarray
         Slope in degrees
     """
-    # Calculate gradients
-    dy, dx = np.gradient(dem)
+    if method == 'horn':
+        # Horn's method - same as ArcGIS Slope tool
+        kernel_x = np.array([[-1, 0, 1],
+                            [-2, 0, 2], 
+                            [-1, 0, 1]]) / (8.0 * cell_size)
+        
+        kernel_y = np.array([[-1, -2, -1],
+                            [0, 0, 0],
+                            [1, 2, 1]]) / (8.0 * cell_size)
+        
+        dx = ndimage.convolve(dem, kernel_x, mode='constant', cval=np.nan)
+        dy = ndimage.convolve(dem, kernel_y, mode='constant', cval=np.nan)
+        
+        slope_rad = np.arctan(np.sqrt(dx**2 + dy**2))
+        
+    else:
+        # Simple gradient method (fallback)
+        dy, dx = np.gradient(dem)
+        slope_rad = np.arctan(np.sqrt(dx**2 + dy**2) / cell_size)
     
-    # Calculate slope
-    slope_rad = np.arctan(np.sqrt(dx**2 + dy**2))
+    # Convert to degrees
     slope_deg = np.degrees(slope_rad)
     
     return slope_deg
 
-def calculate_convexity(dem):
+def calculate_convexity(dem, laplacian_kernel=None, focal_radius=10):
     """
-    Calculate convexity using Laplacian filter
+    Calculate convexity
     
     Parameters:
     -----------
     dem : numpy.ndarray
         Digital elevation model
+    laplacian_kernel : numpy.ndarray, optional
+        Laplacian kernel (uses ArcPy default if None)
+    focal_radius : int
+        Radius for circular focal statistics
         
     Returns:
     --------
     numpy.ndarray
         Convexity values (0-1)
     """
-    # Laplacian kernel
-    kernel = np.array([[-1, -1, -1],
-                       [-1,  8, -1], 
-                       [-1, -1, -1]])
+    if laplacian_kernel is None:
+        # Exact kernel from ArcPy Laplacian_Filter.txt
+        laplacian_kernel = np.array([[-1, -1, -1],
+                                   [-1,  8, -1],
+                                   [-1, -1, -1]], dtype=np.float32)
     
-    # Apply filter, handle NaN properly
-    laplacian = ndimage.convolve(dem, kernel, mode='constant', cval=0.0)
+    # Step 1: Apply Laplacian filter (FocalStatistics with Weight)
+    laplacian = ndimage.convolve(dem, laplacian_kernel, mode='constant', cval=0.0)
     
-    # Handle areas where original DEM was NaN
+    # Handle nodata properly
     dem_nan_mask = np.isnan(dem)
     laplacian[dem_nan_mask] = np.nan
     
-    # Binary: convex areas (positive values)
+    # Step 2: Con operation (VALUE > 0 -> 1, else 0)
     binary = np.zeros_like(laplacian)
     valid_mask = ~np.isnan(laplacian)
-    binary[valid_mask] = (laplacian[valid_mask] > 0).astype(float)
+    binary[valid_mask & (laplacian > 0)] = 1.0
+    binary[~valid_mask] = np.nan
     
-    # Set NaN areas to NaN in binary
-    binary[dem_nan_mask] = np.nan
-    
-    # Focal mean with circular window
-    selem = disk(10)
-    
-    # Only process if we have valid data
-    if not np.all(np.isnan(binary)):
-        try:
-            # Convert to uint8 for rank filter, handling NaN
-            binary_for_rank = np.zeros_like(binary, dtype=np.uint8)
-            valid_binary = ~np.isnan(binary)
-            binary_for_rank[valid_binary] = (binary[valid_binary] * 255).astype(np.uint8)
-            
-            # Add padding to handle edges better
-            pad_width = 10
-            padded = np.pad(binary_for_rank, pad_width, mode='reflect')
-            
-            # Apply rank filter
-            convexity_padded = rank.mean(padded, selem) / 255.0
-            
-            # Remove padding
-            convexity = convexity_padded[pad_width:-pad_width, pad_width:-pad_width]
-            
-            # Restore NaN areas
-            convexity[dem_nan_mask] = np.nan
-            
-        except Exception as e:
-            print(f"Warning: Rank filter failed ({e}), using convolution fallback")
-            # Fallback to convolution
-            conv_kernel = np.ones((21, 21)) / (21*21)
-            convexity = ndimage.convolve(binary, conv_kernel, mode='constant', cval=0.0)
-            convexity[dem_nan_mask] = np.nan
-    else:
-        print("Warning: All convexity values are NaN")
-        convexity = np.full_like(dem, np.nan)
+    # Step 3: FocalStatistics Circle MEAN
+    convexity = _focal_statistics_circular(binary, radius=focal_radius)
     
     return convexity
 
-def calculate_texture(dem):
+def calculate_texture(dem, median_window=3, focal_radius=10):
     """
-    Calculate texture using median differences
+    Calculate texture using exact ArcPy workflow
     
     Parameters:
     -----------
     dem : numpy.ndarray
         Digital elevation model
+    median_window : int
+        Window size for median filter
+    focal_radius : int
+        Radius for circular focal statistics
         
     Returns:
     --------
     numpy.ndarray
-        Texture values (0-1)
+        Texture values
     """
-    # Median filter
-    median_dem = ndimage.median_filter(dem, size=3)
+    # Step 1: Median filter (Rectangle 3 3 CELL)
+    median_dem = ndimage.median_filter(dem, size=median_window)
     
-    # Handle NaN in median result
+    # Handle NaN
     dem_nan_mask = np.isnan(dem)
     median_dem[dem_nan_mask] = np.nan
     
-    # Calculate differences
-    diff_pos = np.maximum(0, dem - median_dem)
-    diff_neg = np.maximum(0, median_dem - dem)
-    texture_raw = diff_pos + diff_neg
+    # Step 2: Minus operations (like ArcPy workflow)
+    diff_pos = np.maximum(0, dem - median_dem)      # TC_dm_md_c
+    diff_neg = np.maximum(0, median_dem - dem)      # TC_md_dm_c
     
-    # Handle edge case where all values are the same or NaN
-    valid_mask = ~np.isnan(texture_raw)
-    if not np.any(valid_mask):
-        return np.full_like(dem, np.nan)
-        
-    max_val = np.nanmax(texture_raw)
-    if max_val == 0 or np.isnan(max_val):
-        result = np.zeros_like(texture_raw)
-        result[dem_nan_mask] = np.nan
-        return result
+    # Step 3: Plus operation
+    texture_raw = diff_pos + diff_neg               # TC_plus
     
-    # Normalize for rank filter
-    texture_norm = np.zeros_like(texture_raw, dtype=np.uint8)
-    texture_norm[valid_mask] = (texture_raw[valid_mask] / max_val * 255).astype(np.uint8)
+    # Step 4: Float operation
+    texture_float = texture_raw.astype(np.float32)  # TC_plus_c_f
     
-    # Focal mean
-    selem = disk(10)
-    try:
-        # Add padding to handle edges better
-        pad_width = 10
-        padded = np.pad(texture_norm, pad_width, mode='reflect')
-        texture_padded = rank.mean(padded, selem) / 255.0
-        texture = texture_padded[pad_width:-pad_width, pad_width:-pad_width]
-        
-        # Restore NaN areas
-        texture[dem_nan_mask] = np.nan
-        
-    except Exception as e:
-        print(f"Warning: Rank filter failed for texture ({e}), using convolution fallback")
-        # Fallback to convolution
-        conv_kernel = np.ones((21, 21)) / (21*21)
-        texture = ndimage.convolve(texture_norm.astype(float), conv_kernel, mode='constant') / 255.0
-        texture[dem_nan_mask] = np.nan
+    # Step 5: FocalStatistics Circle MEAN
+    texture = _focal_statistics_circular(texture_float, radius=focal_radius)
     
     return texture
+
+def _focal_statistics_circular(data, radius=10, statistic='mean'):
+    """
+    Implement circular focal statistics exactly like ArcPy
+    
+    Parameters:
+    -----------
+    data : numpy.ndarray
+        Input data
+    radius : int
+        Radius in cells
+    statistic : str
+        Statistic to calculate ('mean', 'sum', etc.)
+        
+    Returns:
+    --------
+    numpy.ndarray
+        Result of focal statistics
+    """
+    # Create exact circular kernel like ArcPy
+    size = 2 * radius + 1
+    y, x = np.ogrid[-radius:radius+1, -radius:radius+1]
+    circle_mask = x**2 + y**2 <= radius**2
+    
+    # Initialize result
+    result = np.full_like(data, np.nan)
+    
+    # Apply focal statistics
+    for i in range(radius, data.shape[0] - radius):
+        for j in range(radius, data.shape[1] - radius):
+            if not np.isnan(data[i, j]):
+                # Extract circular neighborhood
+                neighborhood = data[i-radius:i+radius+1, j-radius:j+radius+1]
+                circular_values = neighborhood[circle_mask]
+                
+                # Remove NaN values
+                valid_values = circular_values[~np.isnan(circular_values)]
+                
+                if len(valid_values) > 0:
+                    if statistic == 'mean':
+                        result[i, j] = np.mean(valid_values)
+                    elif statistic == 'sum':
+                        result[i, j] = np.sum(valid_values)
+                    elif statistic == 'median':
+                        result[i, j] = np.median(valid_values)
+                    elif statistic == 'std':
+                        result[i, j] = np.std(valid_values)
+    
+    return result
+
+def calculate_all_metrics_arcpy(dem, cell_size=1.0):
+    """
+    Calculate all metrics
+    
+    Parameters:
+    -----------
+    dem : numpy.ndarray
+        Digital elevation model
+    cell_size : float
+        Cell size in map units
+        
+    Returns:
+    --------
+    tuple
+        (slope, convexity, texture) arrays
+    """
+    print("Calculating all metrics ...")
+    
+    # Convert to integer like ArcPy Int_sa
+    dem_int = np.round(dem).astype(np.float32)
+    
+    # Calculate metrics
+    slope = calculate_slope(dem_int, cell_size, method='horn')
+    convexity = calculate_convexity(dem_int)
+    texture = calculate_texture(dem_int)
+    
+    return slope, convexity, texture

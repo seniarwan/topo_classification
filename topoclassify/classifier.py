@@ -8,13 +8,12 @@ from .metrics import calculate_slope, calculate_convexity, calculate_texture
 
 class TopographicClassifier:
     """
-    Full implementation of Iwahashi & Pike (2007) topographic classification
-    Generates 24 classes based on hierarchical analysis of slope, convexity, and texture
+    Main topographic classifier using ArcPy-equivalent algorithms
     """
     
     def __init__(self, dem_path):
         """
-        Initialize classifier
+        Initialize classifier with ArcPy-equivalent settings
         
         Parameters:
         -----------
@@ -24,105 +23,194 @@ class TopographicClassifier:
         self.dem_path = dem_path
         self.load_dem()
         
+        # Extract cell size from DEM (like ArcPy)
+        if hasattr(self, 'profile') and 'transform' in self.profile:
+            self.cell_size = abs(self.profile['transform'][0])
+        else:
+            self.cell_size = 1.0
+        
+        self.z_factor = 1.0
+        
     def load_dem(self):
-        """Load DEM data with proper nodata handling"""
+        """Load DEM with integer conversion (like ArcPy Int_sa)"""
         with rasterio.open(self.dem_path) as src:
-            self.dem_data = src.read(1).astype(np.float32)
+            dem_raw = src.read(1)
             self.profile = src.profile
             
-            # Handle various nodata representations
+            # Handle nodata
             if src.nodata is not None:
-                self.dem_data[self.dem_data == src.nodata] = np.nan
+                dem_raw = dem_raw.astype(np.float32)
+                dem_raw[dem_raw == src.nodata] = np.nan
             
-            # Also handle common nodata values
-            nodata_values = [-9999, -32768, 32767, 0]  # Common nodata values
-            for nodata_val in nodata_values:
-                if np.any(self.dem_data == nodata_val):
-                    # Only treat as nodata if it's at the edges or forms large patches
-                    potential_nodata = self.dem_data == nodata_val
-                    if np.sum(potential_nodata) > 0.01 * self.dem_data.size:  # >1% of pixels
-                        self.dem_data[potential_nodata] = np.nan
+            # Convert to integer like ArcPy's Int_sa operation
+            self.dem_data = np.round(dem_raw).astype(np.float32)
             
-            print(f"DEM loaded: {self.dem_data.shape}, Valid pixels: {np.sum(~np.isnan(self.dem_data))}")
+            print(f"DEM loaded: {self.dem_data.shape}, Cell size: {self.cell_size}")
+    
+    def calculate_slope_horn(self):
+        """
+        Calculate slope using Horn's method (same as ArcGIS Slope tool)
+        """
+        # Horn's 3rd-order finite difference method - exact ArcGIS implementation
+        kernel_x = np.array([[-1, 0, 1],
+                            [-2, 0, 2], 
+                            [-1, 0, 1]]) / (8.0 * self.cell_size)
+        
+        kernel_y = np.array([[-1, -2, -1],
+                            [0, 0, 0],
+                            [1, 2, 1]]) / (8.0 * self.cell_size)
+        
+        # Apply convolution
+        from scipy import ndimage
+        dx = ndimage.convolve(self.dem_data, kernel_x, mode='constant', cval=np.nan)
+        dy = ndimage.convolve(self.dem_data, kernel_y, mode='constant', cval=np.nan)
+        
+        # Calculate slope
+        slope_rad = np.arctan(self.z_factor * np.sqrt(dx**2 + dy**2))
+        slope_deg = np.degrees(slope_rad)
+        
+        return slope_deg
+    
+    def calculate_convexity_arcpy(self):
+        """
+        Calculate convexity exactly following ArcPy workflow
+        """
+        # Step 1: Apply exact Laplacian filter (FocalStatistics with Weight)
+        kernel = np.array([[-1, -1, -1],
+                          [-1,  8, -1],
+                          [-1, -1, -1]], dtype=np.float32)
+        
+        from scipy import ndimage
+        laplacian = ndimage.convolve(self.dem_data, kernel, mode='constant', cval=0.0)
+        
+        # Handle nodata
+        dem_nan_mask = np.isnan(self.dem_data)
+        laplacian[dem_nan_mask] = np.nan
+        
+        # Step 2: Con operation (VALUE > 0 -> 1, else 0)
+        binary = np.zeros_like(laplacian)
+        valid_mask = ~np.isnan(laplacian)
+        binary[valid_mask & (laplacian > 0)] = 1.0
+        binary[~valid_mask] = np.nan
+        
+        # Step 3: FocalStatistics with Circle 10 CELL, MEAN
+        convexity = self._focal_statistics_circular(binary, radius=10)
+        
+        return convexity
+    
+    def calculate_texture_arcpy(self):
+        """
+        Calculate texture exactly following ArcPy workflow
+        """
+        from scipy import ndimage
+        
+        # Step 1: Median filter (3x3 rectangle) 
+        median_dem = ndimage.median_filter(self.dem_data, size=3)
+        
+        # Handle NaN
+        dem_nan_mask = np.isnan(self.dem_data)
+        median_dem[dem_nan_mask] = np.nan
+        
+        # Step 2: Minus operations
+        diff_pos = np.maximum(0, self.dem_data - median_dem)  # Con operation
+        diff_neg = np.maximum(0, median_dem - self.dem_data)  # Con operation
+        
+        # Step 3: Plus operation
+        texture_raw = diff_pos + diff_neg
+        
+        # Step 4: Float operation
+        texture_float = texture_raw.astype(np.float32)
+        
+        # Step 5: FocalStatistics Circle 10 CELL, MEAN
+        texture = self._focal_statistics_circular(texture_float, radius=10)
+        
+        return texture
+    
+    def _focal_statistics_circular(self, data, radius=10):
+        """
+        Implement exact circular focal statistics like ArcPy
+        """
+        # Create exact circular kernel
+        size = 2 * radius + 1
+        y, x = np.ogrid[-radius:radius+1, -radius:radius+1]
+        circle_mask = x**2 + y**2 <= radius**2
+        
+        # Initialize result
+        result = np.full_like(data, np.nan)
+        
+        # Apply focal statistics with circular window
+        for i in range(radius, data.shape[0] - radius):
+            for j in range(radius, data.shape[1] - radius):
+                if not np.isnan(data[i, j]):
+                    # Extract circular neighborhood
+                    neighborhood = data[i-radius:i+radius+1, j-radius:j+radius+1]
+                    circular_values = neighborhood[circle_mask]
+                    
+                    # Calculate mean of valid values
+                    valid_values = circular_values[~np.isnan(circular_values)]
+                    if len(valid_values) > 0:
+                        result[i, j] = np.mean(valid_values)
+        
+        return result
+    
+    def create_iterative_masks(self, slope):
+        """
+        Create iterative masks following exact ArcPy zonal statistics workflow
+        """
+        masks = []
+        current_mask = ~np.isnan(slope)
+        
+        # Follow exact ArcPy sequence: ZonalStatistics -> GreaterThan -> SetNull
+        for iteration in range(5):
+            if not np.any(current_mask):
+                masks.append(np.zeros_like(slope, dtype=bool))
+                continue
             
+            # ZonalStatistics MEAN
+            mean_slope = np.nanmean(slope[current_mask])
+            
+            # GreaterThan operation
+            slope_gt_mean = (slope > mean_slope) & current_mask
+            
+            # SetNull operation (exclude areas with slope > mean)
+            next_mask = current_mask & ~slope_gt_mean
+            
+            masks.append(slope_gt_mean.copy())
+            current_mask = next_mask
+        
+        return masks
+    
     @property
     def slope(self):
-        """Calculate slope (cached)"""
+        """Calculate slope using Horn's method (cached)"""
         if not hasattr(self, '_slope'):
-            print("Calculating slope...")
-            self._slope = calculate_slope(self.dem_data)
+            print("Calculating slope (Horn's method)...")
+            self._slope = self.calculate_slope_horn()
         return self._slope
     
     @property 
     def convexity(self):
-        """Calculate convexity (cached)"""
+        """Calculate convexity using ArcPy method (cached)"""
         if not hasattr(self, '_convexity'):
-            print("Calculating convexity...")
-            self._convexity = calculate_convexity(self.dem_data)
+            print("Calculating convexity (ArcPy method)...")
+            self._convexity = self.calculate_convexity_arcpy()
         return self._convexity
     
     @property
     def texture(self):
-        """Calculate texture (cached)"""
+        """Calculate texture using ArcPy method (cached)"""
         if not hasattr(self, '_texture'):
-            print("Calculating texture...")
-            self._texture = calculate_texture(self.dem_data)
+            print("Calculating texture (ArcPy method)...")
+            self._texture = self.calculate_texture_arcpy()
         return self._texture
-    
-    def create_iterative_masks(self, slope):
-        """
-        Create iterative masks following Iwahashi & Pike method
-        
-        Parameters:
-        -----------
-        slope : numpy.ndarray
-            Slope values
-            
-        Returns:
-        --------
-        list
-            List of masks for 5 hierarchical levels
-        """
-        masks = []
-        current_data = slope.copy()
-        valid_mask = ~np.isnan(slope)
-        
-        # Create 5 hierarchical levels
-        for i in range(5):
-            if not np.any(valid_mask):
-                masks.append(np.zeros_like(slope, dtype=bool))
-                continue
-                
-            # Calculate mean slope for current valid area
-            mean_slope = np.nanmean(current_data[valid_mask])
-            
-            # Areas with slope <= mean remain for next iteration
-            below_mean = (current_data <= mean_slope) & valid_mask
-            
-            # Areas with slope > mean are removed from consideration
-            above_mean = (current_data > mean_slope) & valid_mask
-            
-            # Store mask for areas that will be classified at this level
-            masks.append(above_mean.copy())
-            
-            # Update for next iteration - only areas below mean
-            valid_mask = below_mean
-            current_data[above_mean] = np.nan
-        
-        return masks
     
     def classify(self):
         """
-        Perform full 24-class topographic classification
-        
-        Returns:
-        --------
-        numpy.ndarray
-            Classification result (1-24)
+        Perform classification following exact ArcPy workflow sequence
         """
-        print("Starting Iwahashi & Pike (2007) topographic classification...")
+        print("Starting topographic classification...")
         
-        # Get all metrics
+        # Get all metrics using ArcPy methods
         slope = self.slope
         convexity = self.convexity
         texture = self.texture
@@ -131,21 +219,19 @@ class TopographicClassifier:
         print("Creating hierarchical masks...")
         slope_masks = self.create_iterative_masks(slope)
         
-        # Initialize result
+        # Initialize classification
         classification = np.zeros_like(slope, dtype=np.uint8)
         
         print("Performing hierarchical classification...")
         
-        # Process each level (1-5, corresponding to classes 1-4, 5-8, 9-12, 13-16, 17-20, 21-24)
-        for level in range(6):  # 6 levels total
-            print(f"Processing level {level + 1}/6...")
-            
+        # Process 6 levels following exact ArcPy sequence
+        for level in range(6):
             if level == 0:
-                # Level 0: Use entire valid area (classes 1-4)
+                # Level 0: entire area (classes 1-4)
                 current_mask = ~np.isnan(slope) & ~np.isnan(convexity) & ~np.isnan(texture)
                 base_class = 1
-            elif level <= 5:
-                # Levels 1-5: Use iterative masks (classes 5-8, 9-12, 13-16, 17-20, 21-24)
+            else:
+                # Levels 1-5: iterative masks (classes 5-8, 9-12, 13-16, 17-20, 21-24)
                 if level-1 < len(slope_masks):
                     current_mask = slope_masks[level-1]
                 else:
@@ -155,81 +241,71 @@ class TopographicClassifier:
             if not np.any(current_mask):
                 continue
             
-            # Calculate thresholds for current level
+            # ZonalStatistics for current mask
             slope_mean = np.nanmean(slope[current_mask])
             conv_mean = np.nanmean(convexity[current_mask])
             text_mean = np.nanmean(texture[current_mask])
             
-            # Skip if any threshold is NaN
+            # Skip if thresholds invalid
             if np.isnan(slope_mean) or np.isnan(conv_mean) or np.isnan(text_mean):
                 continue
             
-            # Create binary conditions for current level
+            # GreaterThan operations
             s_high = (slope > slope_mean) & current_mask
-            c_high = (convexity > conv_mean) & current_mask  
+            c_high = (convexity > conv_mean) & current_mask
             t_high = (texture > text_mean) & current_mask
             
-            # Apply 8 combinations (but only first 4 for this implementation)
-            # Following the original paper's methodology
+            # BooleanAnd operations - 4 combinations per level
+            # Following exact ArcPy workflow pattern
             
-            # Class X+0: slope=1, convexity=1, texture=1 (steep, convex, rough)
+            # Class X+0: s=1, c=1, t=1
             mask = s_high & c_high & t_high
             classification[mask] = base_class
             
-            # Class X+1: slope=1, convexity=1, texture=0 (steep, convex, smooth)  
+            # Class X+1: s=1, c=1, t=0
             mask = s_high & c_high & (~t_high & current_mask)
             classification[mask] = base_class + 1
             
-            # Class X+2: slope=1, convexity=0, texture=1 (steep, concave, rough)
+            # Class X+2: s=1, c=0, t=1  
             mask = s_high & (~c_high & current_mask) & t_high
             classification[mask] = base_class + 2
             
-            # Class X+3: slope=1, convexity=0, texture=0 (steep, concave, smooth)
+            # Class X+3: s=1, c=0, t=0
             mask = s_high & (~c_high & current_mask) & (~t_high & current_mask)
             classification[mask] = base_class + 3
-            
-            # Note: Classes with slope=0 are handled in the iterative process
-            # as areas with lower slopes are processed in subsequent iterations
         
-        # Apply post-processing to ensure all valid pixels are classified
-        self._apply_postprocessing(classification, slope, convexity, texture)
+        # Post-processing: Nibble operation
+        self._apply_nibble(classification)
         
         # Get final statistics
         unique_classes = np.unique(classification)
         unique_classes = unique_classes[unique_classes > 0]
-        print(f"Classification completed! Generated {len(unique_classes)} classes: {sorted(unique_classes)}")
+        print(f"Classification completed! Classes: {sorted(unique_classes)}")
         
         return classification
     
-    def _apply_postprocessing(self, classification, slope, convexity, texture):
+    def _apply_nibble(self, classification):
         """
-        Apply post-processing to handle unclassified pixels (excluding nodata)
+        Apply nibble operation for unclassified pixels (like ArcPy Nibble)
         """
-        # Create comprehensive valid data mask
-        valid_pixels = (~np.isnan(slope) & ~np.isnan(convexity) & ~np.isnan(texture) & 
-                       np.isfinite(slope) & np.isfinite(convexity) & np.isfinite(texture))
-        
-        # Find unclassified valid pixels
-        unclassified = (classification == 0) & valid_pixels
+        unclassified = (classification == 0) & (~np.isnan(self.dem_data))
         
         if np.any(unclassified):
-            print(f"Post-processing {np.sum(unclassified)} unclassified pixels...")
+            print(f"Applying nibble to {np.sum(unclassified)} unclassified pixels...")
             
-            # Assign to class 24 (lowest slope, lowest convexity, lowest texture)
-            classification[unclassified] = 24
-        
-        # Ensure nodata areas remain as 0
-        nodata_areas = ~valid_pixels
-        classification[nodata_areas] = 0
+            from scipy.ndimage import maximum_filter
+            
+            # Iterative dilation to fill gaps
+            for iteration in range(3):
+                dilated = maximum_filter(classification, size=3)
+                classification[unclassified] = dilated[unclassified]
+                unclassified = (classification == 0) & (~np.isnan(self.dem_data))
+                if not np.any(unclassified):
+                    break
     
     def get_class_descriptions(self):
         """
         Get descriptions for each class following Iwahashi & Pike methodology
-        
-        Returns:
-        --------
-        dict
-            Class descriptions
         """
         descriptions = {
             1: "Very steep, highly convex, very rough",

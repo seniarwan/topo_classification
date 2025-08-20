@@ -29,10 +29,10 @@ def quick_classify(dem_path, output_path=None, show_plot=True):
     """
     print("Starting quick classification...")
     
-    # Create classifier
+    # Create classifier - SAME AS MANUAL
     classifier = TopographicClassifier(dem_path)
     
-    # Run classification
+    # Run classification - SAME AS MANUAL
     result = classifier.classify()
     
     # Save if requested
@@ -40,13 +40,48 @@ def quick_classify(dem_path, output_path=None, show_plot=True):
         save_geotiff(result, output_path, classifier.profile)
         print(f"Result saved to: {output_path}")
     
-    # Show plot if requested - use the advanced plotting function
+    # Show plot if requested - USE STANDARD FUNCTION (same as manual)
     if show_plot:
         print("Creating visualization...")
-        plot_results_advanced(result, classifier.slope, classifier.convexity, classifier.texture,
-                             title_suffix=" (Quick Classify)")
+        plot_results(result, classifier.slope, classifier.convexity, classifier.texture)
     
     return result
 
-__all__ = ['TopographicClassifier', 'quick_classify', 'calculate_slope', 
+def test_consistency(dem_path):
+    """
+    Test function to verify quick_classify and manual produce same results
+    
+    Parameters:
+    -----------
+    dem_path : str
+        Path to DEM file
+        
+    Returns:
+    --------
+    bool
+        True if results are consistent
+    """
+    print("🧪 Testing consistency between quick_classify and manual classification...")
+    
+    # Quick classify
+    print("\n1. Running quick_classify...")
+    quick_result = quick_classify(dem_path, show_plot=False)
+    
+    # Manual classification
+    print("\n2. Running manual classification...")
+    classifier = TopographicClassifier(dem_path)
+    manual_result = classifier.classify()
+    
+    # Compare
+    from .utils import compare_results
+    is_consistent = compare_results(manual_result, quick_result, "Manual", "Quick")
+    
+    if is_consistent:
+        print("\n✅ PASS: Both methods produce identical results!")
+    else:
+        print("\n❌ FAIL: Results differ between methods!")
+    
+    return is_consistent
+
+__all__ = ['TopographicClassifier', 'quick_classify', 'test_consistency', 'calculate_slope', 
            'calculate_convexity', 'calculate_texture', 'plot_results', 'plot_results_advanced', 'save_geotiff']

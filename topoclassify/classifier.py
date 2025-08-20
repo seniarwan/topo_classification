@@ -21,15 +21,18 @@ class TopographicClassifier:
             Path to DEM file
         """
         self.dem_path = dem_path
+        
+        # Initialize default values first
+        self.cell_size = 1.0
+        self.z_factor = 1.0
+        
+        # Load DEM and update cell size
         self.load_dem()
         
-        # Extract cell size from DEM (like ArcPy)
+        # Extract actual cell size from DEM (like ArcPy)
         if hasattr(self, 'profile') and 'transform' in self.profile:
             self.cell_size = abs(self.profile['transform'][0])
-        else:
-            self.cell_size = 1.0
-        
-        self.z_factor = 1.0
+            print(f"Cell size updated to: {self.cell_size}")
         
     def load_dem(self):
         """Load DEM with integer conversion (like ArcPy Int_sa)"""
@@ -45,7 +48,12 @@ class TopographicClassifier:
             # Convert to integer like ArcPy's Int_sa operation
             self.dem_data = np.round(dem_raw).astype(np.float32)
             
-            print(f"DEM loaded: {self.dem_data.shape}, Cell size: {self.cell_size}")
+            print(f"DEM loaded: {self.dem_data.shape}, Valid pixels: {np.sum(~np.isnan(self.dem_data))}")
+            
+            # Update cell size if available
+            if 'transform' in self.profile:
+                self.cell_size = abs(self.profile['transform'][0])
+                print(f"Cell size: {self.cell_size}")
     
     def calculate_slope_horn(self):
         """
@@ -208,7 +216,7 @@ class TopographicClassifier:
         """
         Perform classification following exact ArcPy workflow sequence
         """
-        print("Starting topographic classification...")
+        print("Starting ArcPy-equivalent topographic classification...")
         
         # Get all metrics using ArcPy methods
         slope = self.slope
